@@ -1,14 +1,9 @@
-name: Epic Awesome Gamer (Scheduled Twice Weekly)
+name: Epic Awesome Gamer (Scheduled AiHubMix)
 
 on:
-  # 1. 手动触发：方便测试
-  workflow_dispatch:
-
-  # 2. 定时触发：每周运行两次
-  # 格式：分 时 天 月 周
-  # 这里的 '55 15 * * 2,5' 表示每周二、每周五的 UTC 15:55 运行
-  # 对应北京时间约为：周二、周五 23:55
+  workflow_dispatch: # 手动触发
   schedule:
+    # 每周二和周五北京时间 23:55 运行
     - cron: '55 15 * * 2,5'
 
 jobs:
@@ -17,52 +12,39 @@ jobs:
     timeout-minutes: 20
 
     steps:
-      # 第一步：安全检查（必须在私有仓库运行）
-      - name: Check repository visibility
-        run: |
-          if [[ "${{ github.event.repository.private }}" != "true" ]]; then
-            echo "⚠️ 安全警告：此 Workflow 包含敏感信息，必须在私有仓库中运行。"
-            echo "请将仓库设置为 Private 后再试。"
-            exit 1
-          fi
-
-      # 第二步：检出你修改后的代码（包含 AiHubMix 拦截器）
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # 第三步：安装 uv 包管理工具
       - name: Install uv
         uses: astral-sh/setup-uv@v5
         with:
           enable-cache: true
 
-      # 第四步：设置 Python 环境
       - name: Set up Python
         run: uv python install 3.12
 
-      # 第五步：安装系统运行环境
       - name: Install system dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y xvfb libxml2-dev libxslt-dev
 
-      # 第六步：同步依赖（安装 openai 等新增库）
       - name: Install dependencies
         run: uv sync
 
-      # 第七步：下载浏览器内核
       - name: Install Camoufox
         run: uv run camoufox fetch
 
-      # 第八步：执行任务（传递所有 AiHubMix 和 Epic 密钥）
       - name: Run Epic Awesome Gamer
         env:
+          # 传递所有必须的 Secret 变量
           EPIC_EMAIL: ${{ secrets.EPIC_EMAIL }}
           EPIC_PASSWORD: ${{ secrets.EPIC_PASSWORD }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           GEMINI_BASE_URL: ${{ secrets.GEMINI_BASE_URL }}
           GEMINI_MODEL: ${{ secrets.GEMINI_MODEL }}
           ENABLE_APSCHEDULER: false
+          # --- 关键：设置 PYTHONPATH 指向 app 文件夹 ---
+          PYTHONPATH: app
         run: |
           echo "🚀 启动定时领取任务（已适配 AiHubMix 中转）..."
           xvfb-run --auto-servernum --server-num=1 --server-args='-screen 0, 1920x1080x24' uv run app/deploy.py

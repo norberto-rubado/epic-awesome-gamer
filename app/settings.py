@@ -2,10 +2,11 @@
 import os
 from pathlib import Path
 from hcaptcha_challenger.agent import AgentConfig
+# 确保引入了 SecretStr
 from pydantic import Field, SecretStr
 from pydantic_settings import SettingsConfigDict
 
-# --- 核心路径定义 (修复 ImportError 的关键) ---
+# --- 核心路径定义 ---
 PROJECT_ROOT = Path(__file__).parent
 VOLUMES_DIR = PROJECT_ROOT.joinpath("volumes")
 
@@ -19,8 +20,8 @@ HCAPTCHA_DIR = VOLUMES_DIR.joinpath("hcaptcha")
 class EpicSettings(AgentConfig):
     model_config = SettingsConfigDict(env_file=".env", env_ignore_empty=True, extra="ignore")
 
-    # === [关键：AiHubMix 中转配置] ===
-    GEMINI_API_KEY: str | None = Field(
+    # === [修复：将类型改为 SecretStr 以匹配底层库要求] ===
+    GEMINI_API_KEY: SecretStr | None = Field(
         default_factory=lambda: os.getenv("GEMINI_API_KEY"),
         description="AiHubMix 的令牌",
     )
@@ -33,7 +34,7 @@ class EpicSettings(AgentConfig):
         description="模型名称",
     )
 
-    # === [Epic 账号配置] ===
+    # === [其他配置保持不变] ===
     EPIC_EMAIL: str = Field(default_factory=lambda: os.getenv("EPIC_EMAIL"))
     EPIC_PASSWORD: SecretStr = Field(default_factory=lambda: os.getenv("EPIC_PASSWORD"))
     DISABLE_BEZIER_TRAJECTORY: bool = Field(default=True)

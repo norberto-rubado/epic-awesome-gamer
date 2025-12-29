@@ -105,7 +105,10 @@ services:
       - EPIC_PASSWORD=your_password            # <--- 修改这里
       - GEMINI_API_KEY=sk-xxxxxxxxxxxx         # <--- 修改这里
       # 可选：修改中转地址
-      - GEMINI_BASE_URL=[https://aihubmix.com](https://aihubmix.com) 
+      - GEMINI_BASE_URL=https://aihubmix.com
+      # 可选：Telegram 通知（领取成功/失败提醒）
+      - TG_BOT_TOKEN=your_telegram_bot_token
+      - TG_CHAT_ID=your_chat_id
     # ...
 
 ```
@@ -117,6 +120,8 @@ docker compose up -d
 
 ```
 
+> 可选：配置 `TG_BOT_TOKEN` 和 `TG_CHAT_ID` 后，每次任务成功/失败都会推送一条 Telegram 消息。
+>
 > 💾 **关于数据持久化**：
 > 容器启动后，您的登录凭证（Cookies）、截图和日志会自动保存在当前目录下的 `./volumes` 文件夹中。
 > 即使删除或重启容器，只要 `./volumes` 文件夹还在，就不需要重新登录。
@@ -168,4 +173,3 @@ docker compose up -d
 <div align="center">
 <b>Enjoy your free games! 🎮</b>
 </div>
-

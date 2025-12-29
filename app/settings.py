@@ -44,6 +44,18 @@ class EpicSettings(AgentConfig):
     EPIC_PASSWORD: SecretStr = Field(default_factory=lambda: os.getenv("EPIC_PASSWORD"))
     DISABLE_BEZIER_TRAJECTORY: bool = Field(default=True)
 
+    TG_BOT_TOKEN: SecretStr | None = Field(
+        default_factory=lambda: os.getenv("TG_BOT_TOKEN"),
+        description="Telegram Bot token",
+    )
+    TG_CHAT_ID: str | None = Field(
+        default_factory=lambda: os.getenv("TG_CHAT_ID"),
+        description="Telegram chat_id (user / group)",
+    )
+    TG_NOTIFY_ON_SUCCESS: bool = Field(default=True)
+    TG_NOTIFY_ON_FAILURE: bool = Field(default=True)
+    TG_DISABLE_WEB_PAGE_PREVIEW: bool = Field(default=True)
+
     cache_dir: Path = HCAPTCHA_DIR.joinpath(".cache")
     challenge_dir: Path = HCAPTCHA_DIR.joinpath(".challenge")
     captcha_response_dir: Path = HCAPTCHA_DIR.joinpath(".captcha")

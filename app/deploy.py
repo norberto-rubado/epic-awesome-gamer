@@ -16,6 +16,7 @@ import signal
 import sys
 from contextlib import suppress
 from datetime import datetime
+from time import monotonic
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
@@ -25,8 +26,9 @@ from loguru import logger
 from playwright.async_api import ViewportSize
 from pytz import timezone
 
+from notifications.telegram import TelegramConfig, send_telegram_message
 from services.epic_authorization_service import EpicAuthorization
-from services.epic_games_service import EpicAgent
+from services.epic_games_service import CollectionResult, EpicAgent
 from settings import LOG_DIR, RECORD_DIR
 from settings import settings
 from utils import init_log
@@ -42,8 +44,53 @@ init_log(
 TIMEZONE = timezone("Asia/Shanghai")
 
 
-@logger.catch
-async def execute_browser_tasks(headless: bool = True):
+def _mask_email(email: str) -> str:
+    email = (email or "").strip()
+    if "@" not in email:
+        return email or "<unknown>"
+    local, domain = email.split("@", 1)
+    if len(local) <= 2:
+        masked_local = local[:1] + "***"
+    else:
+        masked_local = local[:1] + "***" + local[-1:]
+    return f"{masked_local}@{domain}"
+
+
+def _format_promotions(result: CollectionResult) -> str:
+    if not result.promotions:
+        return "周免: 0"
+    lines = [f"周免: {len(result.promotions)}"]
+    for p in result.promotions[:10]:
+        lines.append(f"- {p.title}")
+    if len(result.promotions) > 10:
+        lines.append(f"- ... (+{len(result.promotions) - 10})")
+    return "\n".join(lines)
+
+
+async def _maybe_notify(text: str, *, success: bool) -> None:
+    if success and not settings.TG_NOTIFY_ON_SUCCESS:
+        return
+    if not success and not settings.TG_NOTIFY_ON_FAILURE:
+        return
+
+    if not settings.TG_BOT_TOKEN or not settings.TG_CHAT_ID:
+        return
+
+    token = settings.TG_BOT_TOKEN.get_secret_value().strip()
+    chat_id = str(settings.TG_CHAT_ID).strip()
+    if not token or not chat_id:
+        return
+
+    config = TelegramConfig(
+        bot_token=token,
+        chat_id=chat_id,
+        disable_web_page_preview=settings.TG_DISABLE_WEB_PAGE_PREVIEW,
+    )
+    await send_telegram_message(config, text)
+
+
+@logger.catch(reraise=True)
+async def execute_browser_tasks(headless: bool = True) -> CollectionResult:
     """
     Execute Epic Games free game collection tasks using browser automation.
 
@@ -79,7 +126,7 @@ async def execute_browser_tasks(headless: bool = True):
         logger.debug("Starting free games collection process")
         game_page = await browser.new_page()
         agent = EpicAgent(game_page)
-        await agent.collect_epic_games()
+        result = await agent.collect_epic_games()
         logger.debug("Free games collection completed")
 
         # Cleanup browser resources
@@ -92,6 +139,73 @@ async def execute_browser_tasks(headless: bool = True):
             await browser.close()
 
         logger.debug("Browser tasks execution finished successfully")
+        return result
+
+
+async def run_collection_task(headless: bool, trigger: str):
+    started = monotonic()
+    masked_email = _mask_email(settings.EPIC_EMAIL)
+    now = datetime.now(TIMEZONE).strftime("%Y-%m-%d %H:%M:%S %Z")
+
+    try:
+        result = await execute_browser_tasks(headless=headless)
+        elapsed_s = monotonic() - started
+
+        if result.outcome == "already_in_library":
+            text = (
+                f"[Epic Awesome Gamer] 任务完成（{trigger}）\n"
+                f"账号: {masked_email}\n"
+                f"结果: 已在库/无可领取\n"
+                f"耗时: {elapsed_s:.1f}s\n"
+                f"时间: {now}"
+            )
+            await _maybe_notify(text, success=True)
+            return
+
+        if result.outcome == "completed":
+            text = (
+                f"[Epic Awesome Gamer] 任务完成（{trigger}）\n"
+                f"账号: {masked_email}\n"
+                f"{_format_promotions(result)}\n"
+                f"结果: 流程完成（可能已领取/已在库）\n"
+                f"耗时: {elapsed_s:.1f}s\n"
+                f"时间: {now}"
+            )
+            await _maybe_notify(text, success=True)
+            return
+
+        if result.outcome == "not_logged_in":
+            text = (
+                f"[Epic Awesome Gamer] 任务失败（{trigger}）\n"
+                f"账号: {masked_email}\n"
+                f"结果: 登录状态无效/未登录\n"
+                f"耗时: {elapsed_s:.1f}s\n"
+                f"时间: {now}"
+            )
+            await _maybe_notify(text, success=False)
+            return
+
+        text = (
+            f"[Epic Awesome Gamer] 任务失败（{trigger}）\n"
+            f"账号: {masked_email}\n"
+            f"{_format_promotions(result)}\n"
+            f"错误: {result.error or 'unknown error'}\n"
+            f"耗时: {elapsed_s:.1f}s\n"
+            f"时间: {now}"
+        )
+        await _maybe_notify(text, success=False)
+    except Exception as err:
+        elapsed_s = monotonic() - started
+        text = (
+            f"[Epic Awesome Gamer] 任务失败（{trigger}）\n"
+            f"账号: {masked_email}\n"
+            f"错误: {err}\n"
+            f"耗时: {elapsed_s:.1f}s\n"
+            f"时间: {now}"
+        )
+        await _maybe_notify(text, success=False)
+        logger.exception(err)
+        return
 
 
 async def deploy():
@@ -111,7 +225,7 @@ async def deploy():
     )
 
     # Execute an immediate collection task
-    await execute_browser_tasks(headless=headless)
+    await run_collection_task(headless=headless, trigger="startup")
 
     # Skip scheduler setup if disabled in configuration
     if not settings.ENABLE_APSCHEDULER:
@@ -123,24 +237,24 @@ async def deploy():
 
     # Strategy 1: Thursday 23:30 to Friday 03:30, every hour (Beijing Time)
     scheduler.add_job(
-        execute_browser_tasks,
+        run_collection_task,
         trigger=CronTrigger(
             day_of_week="thu", hour="23,0,1,2,3", minute="30", timezone="Asia/Shanghai"
         ),
         id="weekly_epic_games_task",
         name="weekly_epic_games_task",
-        args=[headless],
+        args=[headless, "weekly"],
         replace_existing=False,
         max_instances=1,
     )
 
     # Strategy 2: Daily at 12:00 PM (Beijing Time)
     scheduler.add_job(
-        execute_browser_tasks,
+        run_collection_task,
         trigger=CronTrigger(hour="12", minute="0", timezone="Asia/Shanghai"),
         id="daily_epic_games_task",
         name="daily_epic_games_task",
-        args=[headless],
+        args=[headless, "daily"],
         replace_existing=False,
         max_instances=1,
     )

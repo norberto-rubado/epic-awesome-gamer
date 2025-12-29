@@ -5,9 +5,11 @@
 # Description: 游戏商城控制句柄
 
 import json
+from dataclasses import dataclass
 from contextlib import suppress
 from json import JSONDecodeError
 from typing import List
+from typing import Literal
 
 import httpx
 from hcaptcha_challenger.agent import AgentV
@@ -31,6 +33,13 @@ URL_CART_SUCCESS = "https://store.epicgames.com/en-US/cart/success"
 URL_PROMOTIONS = "https://store-site-backend-static.ak.epicgames.com/freeGamesPromotions"
 URL_PRODUCT_PAGE = "https://store.epicgames.com/en-US/p/"
 URL_PRODUCT_BUNDLES = "https://store.epicgames.com/en-US/bundles/"
+
+
+@dataclass(frozen=True)
+class CollectionResult:
+    outcome: Literal["already_in_library", "completed", "not_logged_in", "failed"]
+    promotions: List[PromotionGame]
+    error: str | None = None
 
 
 def get_promotions() -> List[PromotionGame]:
@@ -125,32 +134,32 @@ class EpicAgent:
             return True
         return False
 
-    async def collect_epic_games(self):
+    async def collect_epic_games(self) -> CollectionResult:
         if await self._should_ignore_task():
             logger.success("All week-free games are already in the library")
-            return
+            return CollectionResult(outcome="already_in_library", promotions=[])
 
         if not self._ctx_cookies_is_available:
-            return
+            return CollectionResult(outcome="not_logged_in", promotions=[])
 
         if not self._promotions:
             await self._check_orders()
 
         if not self._promotions:
             logger.success("All week-free games are already in the library")
-            return
+            return CollectionResult(outcome="already_in_library", promotions=[])
 
         for p in self._promotions:
             pj = json.dumps({"title": p.title, "url": p.url}, indent=2, ensure_ascii=False)
             logger.debug(f"Discover promotion \n{pj}")
 
-        if self._promotions:
-            try:
-                await self.epic_games.collect_weekly_games(self._promotions)
-            except Exception as e:
-                logger.exception(e)
-        
-        logger.debug("All tasks in the workflow have been completed")
+        try:
+            await self.epic_games.collect_weekly_games(self._promotions)
+            logger.debug("All tasks in the workflow have been completed")
+            return CollectionResult(outcome="completed", promotions=self._promotions)
+        except Exception as err:
+            logger.exception(err)
+            return CollectionResult(outcome="failed", promotions=self._promotions, error=str(err))
 
 
 class EpicGames:

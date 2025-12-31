@@ -62,14 +62,30 @@ def get_promotions() -> List[PromotionGame]:
         if not is_discount_game(e):
             continue
 
+        # -----------------------------------------------------------
+        # 🟢 修复开始：智能判断 URL 前缀 (Bundle vs Base Game)
+        # -----------------------------------------------------------
+        base_url = URL_PRODUCT_PAGE # 默认为普通游戏
+        
+        # 检查 offerType 是否为捆绑包
+        if e.get("offerType") == "BUNDLE":
+            base_url = URL_PRODUCT_BUNDLES
+            logger.debug(f"📦 Detected Bundle Type: {e.get('title')}")
+
         try:
-            e["url"] = f"{URL_PRODUCT_PAGE.rstrip('/')}/{e['offerMappings'][0]['pageSlug']}"
+            # 优先使用 offerMappings 中的 pageSlug
+            slug = e['offerMappings'][0]['pageSlug']
+            e["url"] = f"{base_url.rstrip('/')}/{slug}"
         except (KeyError, IndexError):
+            # 兜底使用 productSlug
             if e.get("productSlug"):
-                e["url"] = f"{URL_PRODUCT_PAGE.rstrip('/')}/{e['productSlug']}"
+                e["url"] = f"{base_url.rstrip('/')}/{e['productSlug']}"
             else:
                 logger.info(f"Failed to get URL: {e}")
                 continue
+        # -----------------------------------------------------------
+        # 🟢 修复结束
+        # -----------------------------------------------------------
 
         logger.info(e["url"])
         promotions.append(PromotionGame(**e))
@@ -207,38 +223,25 @@ class EpicGames:
         agent = AgentV(page=page, agent_config=settings)
 
         try:
-            # 1. 定位按钮
             wpc, payment_btn = await self._active_purchase_container(page)
-            
-            # 2. 点击下单 (必须强制点击)
             logger.debug(f"Clicking payment button: {await payment_btn.text_content()}")
             await payment_btn.click(force=True)
-            
-            # 给一点反应时间
             await page.wait_for_timeout(3000)
             
-            # 3. 尝试处理验证码 (增加容错)
-            # 关键修改：如果不需要验证码，wait_for_challenge 可能会报错，我们需要忽略这个错误
             try:
                 logger.debug("Checking for CAPTCHA...")
                 await agent.wait_for_challenge()
             except Exception as e:
-                # 这里的报错通常是因为没有弹出验证码，导致库找不到元素
-                # 我们将其视为“无验证码直接成功”，记录日志但不中断
                 logger.info(f"CAPTCHA detection skipped (Likely no CAPTCHA needed): {e}")
 
-            # 4. 检查结果 (推断成功)
-            # 如果按钮已经消失或不可见，或者 iframe 已经关闭，说明下单成功了
             try:
                 if not await payment_btn.is_visible():
                      logger.success("🎉 Instant Checkout: Payment button disappeared (Success inferred)")
                      return
             except Exception:
-                # 如果定位器失效，说明 iframe 可能已经关了，这也是成功
                 logger.success("🎉 Instant Checkout: Iframe closed (Success inferred)")
                 return
 
-            # 如果按钮还在，可能需要二次确认
             logger.warning("⚠️ Payment button still visible. Attempting one last click...")
             with suppress(Exception):
                 await payment_btn.click(force=True)
@@ -247,9 +250,7 @@ class EpicGames:
             logger.success("Instant checkout flow finished (Blind Success).")
 
         except Exception as err:
-            # 只要之前点击了按钮，就有可能已经成功入库。不要抛出致命错误。
             logger.warning(f"Instant checkout warning (Game might still be claimed): {err}")
-            # 刷新页面以重置状态，防止影响下一个游戏
             await page.reload()
 
     async def add_promotion_to_cart(self, page: Page, urls: List[str]) -> bool:
@@ -257,6 +258,12 @@ class EpicGames:
 
         for url in urls:
             await page.goto(url, wait_until="load")
+
+            # 🟢 增加 404 检测 (防止 URL 错误导致假成功)
+            title = await page.title()
+            if "404" in title or "Page Not Found" in title:
+                logger.error(f"❌ Invalid URL (404 Page): {url} - Possible Bundle/URL mismatch.")
+                continue
 
             # 1. 处理弹窗
             try:
